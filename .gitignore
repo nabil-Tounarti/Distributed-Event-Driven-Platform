@@ -1,0 +1,51 @@
+# ========================
+# Gradle / Build
+# ========================
+
+/.gradle/
+**/.gradle/
+build/
+**/build/
+
+# ========================
+# IntelliJ / JetBrains
+# ========================
+.idea/
+*.iml
+*.iws
+out/
+*.ipr
+
+# ========================
+# OS files
+# ========================
+.DS_Store
+Thumbs.db
+
+# ========================
+# Logs / temporary files
+# ========================
+*.log
+*.tmp
+*.swp
+
+# ========================
+# Test / Coverage reports
+# ========================
+/build/reports/
+/build/test-results/
+/build/coverage/
+
+# ========================
+# Spring Boot
+# ========================
+/target/
+spring.log
+
+# ========================
+# Others
+# ========================
+*.hprof
+*.bak
+*.orig
+*.rej

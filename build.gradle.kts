@@ -1,0 +1,4 @@
+allprojects {
+    group   = "com.ecommerce"
+    version = "1.0.0-SNAPSHOT"
+}
