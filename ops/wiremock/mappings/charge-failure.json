@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "/charge",
+    "bodyPatterns": [
+      { "contains": "4000" }
+    ]
+  },
+  "response": {
+    "status": 400,
+    "bodyFileName": "failure.json"
+  }
+}

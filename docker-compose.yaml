@@ -1,0 +1,459 @@
+networks:
+  public-zone:
+    driver: bridge
+  service-zone:
+    driver: bridge
+  data-zone:
+    driver: bridge
+  ops-zone:
+    driver: bridge
+
+volumes:
+  postgres_user_data:
+  postgres_order_data:
+  postgres_payment_data:
+  postgres_inventory_data:
+  postgres_product_data:
+
+  mongo_data:
+  elasticsearch_data:
+  redis_data:
+  kafka_data:
+  zookeeper_data:
+  zookeeper_log:
+  prometheus_data:
+  grafana_data:
+  kibana_data:
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.3
+    container_name: zookeeper
+    networks:
+      - service-zone
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.3
+    container_name: kafka
+    networks:
+      - service-zone
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"      # External access for local dev tools
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1        # 1 broker in local; use 3 in prod
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1              # Set to 3 in production (ADR-001)
+      KAFKA_NUM_PARTITIONS: 6                          # 6 partitions per topic (parallelism)
+      KAFKA_ENABLE_IDEMPOTENCE: "true"                 # Exactly-once semantics
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"         # Topics created explicitly below
+      KAFKA_LOG_RETENTION_HOURS: 168                   # 7 days retention (audit capability)
+      KAFKA_COMPRESSION_TYPE: lz4                      # ~60% network IO reduction
+      KAFKA_CONSUMER_MAX_POLL_INTERVAL_MS: 300000
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.3
+    container_name: kafka-init
+    networks:
+      - service-zone
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./scripts/create-topics.sh:/create-topics.sh
+    command: [ "sh", "/create-topics.sh" ]
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.3
+    container_name: schema-registry
+    networks:
+      - service-zone
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+
+  # ===========================================================================
+  # INFRASTRUCTURE — DATABASES (Rule: per-service isolation, never shared)
+  # ===========================================================================
+
+  # User Service DB — ACID, relational, suits user/auth data
+  postgres-user:
+    image: postgres:15-alpine
+    container_name: postgres-user
+    networks:
+      - data-zone
+    environment:
+      POSTGRES_DB: user_db
+      POSTGRES_USER: user_svc
+      POSTGRES_PASSWORD: ${POSTGRES_USER_PASSWORD:-user_secret}
+    volumes:
+      - postgres_user_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user_svc -d user_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Order Service DB — state machine pattern, Saga state in JSONB
+  postgres-order:
+    image: postgres:15-alpine
+    container_name: postgres-order
+    networks:
+      - data-zone
+    environment:
+      POSTGRES_DB: order_db
+      POSTGRES_USER: order_svc
+      POSTGRES_PASSWORD: ${POSTGRES_ORDER_PASSWORD:-order_secret}
+    volumes:
+      - postgres_order_data:/var/lib/postgresql/data
+    # Debezium CDC requires WAL level = logical for Outbox Pattern (ADR-003)
+    command: >
+      postgres
+      -c wal_level=logical
+      -c max_wal_senders=4
+      -c max_replication_slots=4
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U order_svc -d order_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Payment Service DB — strict ACID for financial records
+  postgres-payment:
+    image: postgres:15-alpine
+    container_name: postgres-payment
+    networks:
+      - data-zone
+    environment:
+      POSTGRES_DB: payment_db
+      POSTGRES_USER: payment_svc
+      POSTGRES_PASSWORD: ${POSTGRES_PAYMENT_PASSWORD:-payment_secret}
+    volumes:
+      - postgres_payment_data:/var/lib/postgresql/data
+    command: >
+      postgres
+      -c wal_level=logical
+      -c max_wal_senders=4
+      -c max_replication_slots=4
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payment_svc -d payment_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Inventory Service DB — optimistic locking for oversell prevention
+  postgres-inventory:
+    image: postgres:15-alpine
+    container_name: postgres-inventory
+    networks:
+      - data-zone
+    environment:
+      POSTGRES_DB: inventory_db
+      POSTGRES_USER: inventory_svc
+      POSTGRES_PASSWORD: ${POSTGRES_INVENTORY_PASSWORD:-inventory_secret}
+    volumes:
+      - postgres_inventory_data:/var/lib/postgresql/data
+    command: >
+      postgres
+      -c wal_level=logical
+      -c max_wal_senders=4
+      -c max_replication_slots=4
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inventory_svc -d inventory_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Product Service DB — source of truth; synced to Elasticsearch via Debezium CDC
+  postgres-product:
+    image: postgres:15-alpine
+    container_name: postgres-product
+    networks:
+      - data-zone
+    environment:
+      POSTGRES_DB: product_db
+      POSTGRES_USER: product_svc
+      POSTGRES_PASSWORD: ${POSTGRES_PRODUCT_PASSWORD:-product_secret}
+    volumes:
+      - postgres_product_data:/var/lib/postgresql/data
+    command: >
+      postgres
+      -c wal_level=logical
+      -c max_wal_senders=4
+      -c max_replication_slots=4
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U product_svc -d product_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MongoDB — Product metadata, flexible schema for varying product attributes
+  mongodb:
+    image: mongo:7.0
+    container_name: mongodb
+    networks:
+      - data-zone
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-mongo_admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-mongo_secret}
+      MONGO_INITDB_DATABASE: product_metadata
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Elasticsearch — Product search read model (CQRS: Postgres=write, ES=read)
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
+    container_name: elasticsearch
+    networks:
+      - data-zone
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false        # Disable for local dev only
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  # Redis — Caching (Cache-Aside), rate limiting (token bucket), session blacklist
+  redis:
+    image: redis:7.2-alpine
+    container_name: redis
+    networks:
+      - service-zone
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===========================================================================
+  # CDC — DEBEZIUM (ADR-003: Outbox Pattern relay + ADR-004: Postgres→ES sync)
+  # ===========================================================================
+
+  debezium:
+    image: debezium/connect:2.5
+    container_name: debezium
+    networks:
+      - service-zone
+      - data-zone
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres-order:
+        condition: service_healthy
+      postgres-payment:
+        condition: service_healthy
+      postgres-inventory:
+        condition: service_healthy
+      postgres-product:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:29092
+      GROUP_ID: debezium-connect-cluster
+      CONFIG_STORAGE_TOPIC: debezium_connect_configs
+      OFFSET_STORAGE_TOPIC: debezium_connect_offsets
+      STATUS_STORAGE_TOPIC: debezium_connect_statuses
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+
+  # ===========================================================================
+  # OBSERVABILITY — METRICS (Prometheus + Grafana)
+  # ===========================================================================
+
+  prometheus:
+    image: prom/prometheus:v2.48.1
+    container_name: prometheus
+    networks:
+      - ops-zone
+      - service-zone   # Needs access to scrape /actuator/prometheus on each service
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+
+  grafana:
+    image: grafana/grafana:10.2.3
+    container_name: grafana
+    networks:
+      - ops-zone
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+
+  # ===========================================================================
+  # OBSERVABILITY — LOGGING (ELK Stack)
+  # ===========================================================================
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.11.3
+    container_name: logstash
+    networks:
+      - ops-zone
+      - data-zone
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - ./ops/logstash/pipeline:/usr/share/logstash/pipeline:ro
+    environment:
+      LS_JAVA_OPTS: "-Xms256m -Xmx256m"
+    ports:
+      - "5044:5044"   # Beats input
+      - "5001:5000"   # TCP input for structured JSON logs
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.3
+    container_name: kibana
+    networks:
+      - ops-zone
+      - data-zone
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    ports:
+      - "5601:5601"
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      XPACK_SECURITY_ENABLED: "false"
+    volumes:
+      - kibana_data:/usr/share/kibana/data
+
+  # ===========================================================================
+  # OBSERVABILITY — DISTRIBUTED TRACING (Zipkin)
+  # Sampling rate set to 10% in production — configured per service
+  # ===========================================================================
+
+  zipkin:
+    image: openzipkin/zipkin:3.0
+    container_name: zipkin
+    networks:
+      - ops-zone
+      - service-zone   # Services send spans directly to Zipkin
+    ports:
+      - "9411:9411"
+    environment:
+      STORAGE_TYPE: elasticsearch
+      ES_HOSTS: http://elasticsearch:9200
+
+  # ===========================================================================
+  # DEV TOOLS (local only — remove in production CI)
+  # ===========================================================================
+
+  # Kafka UI — browse topics, messages, consumer lag
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    networks:
+      - service-zone
+    ports:
+      - "8089:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_started
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: debezium
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://debezium:8083
+
+  # MailHog — catches all outgoing emails in dev (Notification Service mock SMTP)
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    container_name: mailhog
+    networks:
+      - service-zone
+    ports:
+      - "8025:8025"   # Web UI
+      - "1025:1025"   # SMTP
+
+  # Payment Gateway Mock — simulates Stripe success/failure scenarios
+  payment-gateway-mock:
+    image: wiremock/wiremock:3.3.1
+    container_name: payment-gateway-mock
+    networks:
+      - service-zone
+    ports:
+      - "9000:8080"
+    volumes:
+      - ./ops/wiremock:/home/wiremock
+
+# =============================================================================
+# SECRETS (use Kubernetes Secrets in production — never in ConfigMaps)
+# =============================================================================
+secrets:
+  jwt_private_key:
+    file: ./secrets/jwt_private_key.pem
+  jwt_public_key:
+    file: ./secrets/jwt_public_key .pem
