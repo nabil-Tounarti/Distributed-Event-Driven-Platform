@@ -6,6 +6,7 @@ plugins {
 dependencies {
 	api(libs.spring.boot.starter.validation)
 	api(libs.lombok)
+	api(libs.jackson)
 	compileOnly(libs.lombok)
 	annotationProcessor(libs.lombok)
 	
