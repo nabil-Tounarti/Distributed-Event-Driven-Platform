@@ -49,3 +49,5 @@ spring.log
 *.bak
 *.orig
 *.rej
+/user-service/src/main/resources/jwt-keystore.p12
+/user-service/.env

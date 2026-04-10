@@ -16,6 +16,7 @@ resilience4j        = "2.2.0"
 # Spring Boot
 spring-boot-starter-web        = { module = "org.springframework.boot:spring-boot-starter-web",        version.ref = "spring-boot" }
 spring-boot-starter-data-jpa   = { module = "org.springframework.boot:spring-boot-starter-data-jpa",   version.ref = "spring-boot" }
+spring-boot-starter-data-redis = { module = "org.springframework.boot:spring-boot-starter-data-redis",   version.ref = "spring-boot" }
 spring-boot-starter-security   = { module = "org.springframework.boot:spring-boot-starter-security",   version.ref = "spring-boot" }
 spring-boot-starter-validation = { module = "org.springframework.boot:spring-boot-starter-validation", version.ref = "spring-boot" }
 spring-boot-starter-actuator   = { module = "org.springframework.boot:spring-boot-starter-actuator",   version.ref = "spring-boot" }
@@ -26,6 +27,9 @@ spring-cloud-gateway           = { module = "org.springframework.cloud:spring-cl
 spring-cloud-eureka-client     = { module = "org.springframework.cloud:spring-cloud-starter-netflix-eureka-client" }
 spring-cloud-config-client     = { module = "org.springframework.cloud:spring-cloud-starter-config" }
 spring-cloud-openfeign         = { module = "org.springframework.cloud:spring-cloud-starter-openfeign" }
+
+#Security
+nimbus = { module = "com.nimbusds:nimbus-jose-jwt", version = "9.37.3" }
 
 # Messaging
 spring-kafka                   = { module = "org.springframework.kafka:spring-kafka",                   version.ref = "kafka" }
@@ -53,7 +57,7 @@ junit-bom                      = { module = "org.junit:junit-bom",              
 [bundles]
 # Bundles = grab one reference, get multiple deps — great for common combos
 spring-web-stack   = ["spring-boot-starter-web", "spring-boot-starter-validation", "spring-boot-starter-actuator"]
-spring-data-stack  = ["spring-boot-starter-data-jpa", "postgresql"]
+spring-data-stack  = ["spring-boot-starter-data-jpa", "spring-boot-starter-data-redis", "postgresql"]
 testing            = ["spring-boot-starter-test", "testcontainers-junit", "testcontainers-postgresql"]
 mapstruct-full     = ["mapstruct", "lombok"]
 
