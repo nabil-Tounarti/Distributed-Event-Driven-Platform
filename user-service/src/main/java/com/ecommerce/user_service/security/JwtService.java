@@ -50,6 +50,8 @@ public class JwtService {
           new RSAKey.Builder(publicKey)
               .privateKey(privateKey)
               .keyID(UUID.randomUUID().toString())
+              .algorithm(JWSAlgorithm.RS256)
+              .keyUse(KeyUse.SIGNATURE)
               .build();
 
       log.info("JWT RSA key loaded successfully");

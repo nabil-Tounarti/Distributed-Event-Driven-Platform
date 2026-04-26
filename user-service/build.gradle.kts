@@ -9,6 +9,7 @@ dependencies {
     implementation(libs.nimbus)
     implementation(libs.spring.boot.starter.security)
     implementation(libs.spring.cloud.eureka.client)
+    implementation(libs.springdoc.openapi)
     implementation(libs.mapstruct)
     annotationProcessor(libs.mapstruct.processor)
 

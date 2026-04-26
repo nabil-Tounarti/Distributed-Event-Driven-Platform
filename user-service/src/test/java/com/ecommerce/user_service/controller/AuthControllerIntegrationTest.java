@@ -1,6 +1,7 @@
 package com.ecommerce.user_service.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -34,11 +35,11 @@ class AuthControllerIntegrationTest extends AbstractIntegrationTest {
   @Test
   @DisplayName("Full Auth Lifecycle: Register -> Login -> Refresh")
   void fullAuthLifecycle() throws Exception {
-    String email = "senior@faang.com";
+    String email = "nabil@test.com";
     String password = "StrongPassword123!";
 
     // 1. Register
-    RegisterRequest regRequest = new RegisterRequest(email, password, "Senior", "Engineer");
+    RegisterRequest regRequest = new RegisterRequest(email, password, "nabil", "tounarti");
     mockMvc
         .perform(
             post("/auth/register")
@@ -100,6 +101,22 @@ class AuthControllerIntegrationTest extends AbstractIntegrationTest {
             post("/auth/register")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(second)))
-        .andExpect(status().isConflict());
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.status").value(409))
+        .andExpect(jsonPath("$.error").value("Email already registered"))
+        .andExpect(jsonPath("$.timestamp").exists());
+  }
+
+  @Test
+  @DisplayName("Should return valid JWKS containing RSA public key")
+  void getJwks_Contract() throws Exception {
+    mockMvc
+        .perform(get("/auth/jwks"))
+        .andExpect(status().isOk())
+        .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+        .andExpect(jsonPath("$.keys").isArray())
+        .andExpect(jsonPath("$.keys[0].kty").value("RSA"))
+        .andExpect(jsonPath("$.keys[0].alg").value("RS256"))
+        .andExpect(jsonPath("$.keys[0].use").value("sig"));
   }
 }
